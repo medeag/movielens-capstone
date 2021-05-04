@@ -14,20 +14,18 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 # Introduction
-In our era business success often depends if we are able to recommend correct product to the end-user. The good example of this is streaming services like Netflix. To keep users engaged we must provide them content relative to them. 
-
-We have built our movie rating predictation model by expanded what we have learned in Prof. Rafael A Irizarry's class about Netflix challenge,  Assumptions here reader is familiar terms like RMSE & regularization, so we won't need to redefine them. We would highly recommend to check his "Introduction to Data Science".
+In our modern era business success often depends if we are able to recommend correct product to the end-user. The good example of this is streaming services like Netflix. To keep users engaged we must provide them  relative content.
 
 In this project we pursued two simple objectives:
 
 1. Try to analyze what were the key factors that contributed to the high or low rating for the specific user, which is the the heart of movie recommendation 
-2. Make RMSE < 0.86490
+2. Make RMSE < 0.86490 (We have built our movie rating predictation model by expanded what we have learned in Prof. Rafael A Irizarry's class about Netflix challenge,  Assumptions here reader is familiar terms like RMSE & regularization, so we won't need to redefine them. We would highly recommend to check his "Introduction to Data Science".)
 
 
-Data we used in the analysis comes from GroupLens,  10M version, which makes our work simpler but data sufficient enough to draw vital conclusions.  We performed data wrangling: split data for training/testing/validation reasons, compare different biases and achieved our goals. 
+Data we used in the analysis comes from GroupLens,  10M version, which makes our work simpler but is sufficient to draw vital conclusions.  We performed data wrangling: split data for training/testing/validation reasons, compare different biases and achieve our goals. 
 
 # Analysis
-After download we have reviewed columns of the movielens, we decided to extract year from timestamp  as separate column.
+After download data we have reviewed columns of the movielens, we decided to extract year from timestamp  as separate column.
 For analysis data was split into edx (90%) & validation(10%) sets . Former for training and latter for the final validation.
 ```{r include=FALSE}
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
@@ -98,7 +96,7 @@ edx %>%
             )
 ```
 
-Based on simple intuition move itself as well as crankiness of the user affects overall rating of the movie. But are they real factors? If Yes, what are other bias? Genres, year seems to be like good candidate to check. To summarize we had following questions for us:
+Based on intuition movie itself as well as crankiness of the user contributes overall rating of the movie. This can be easily proved by data. We also review other possible bias factors. So questions we've tried to answer:
 
 1. What RMSE we will get if we use naive approach, e.i. if we follow our intuition and give movies rating as average of whole ratings
 2. What if we only consider movie affect?
@@ -119,6 +117,11 @@ tmp_test_set <- edx[test_index_edx,]
 test_set <- tmp_test_set %>% 
   semi_join(train_set, by = "movieId") %>%
   semi_join(train_set, by = "userId")
+
+# Add rows removed from test set back into train set
+removed_test <- anti_join(tmp_test_set, test_set)
+train_set <- rbind(train_set, removed_test)
+
 ```
 First let's develop simple model and predict the same rating for all movies regardless of user. Here all the differences explained by random variation and model would look like this:
 
@@ -154,7 +157,7 @@ i_rmse
 rmse_results <- rmse_results %>% add_row(method = "Movie", RMSE = i_rmse)
 qplot(b_i, data = movie_avgs, bins = 10, color = I("black"))
 ```
-The result we get is much better than naive one. We proceed with other bias, but for simplicity reasons in the snippets below we are showing only two scenarios: Movie/User/Year/Genres and Movie/User/Year/Genres/Regularization
+The result we get is better than naive one. Although we've proceed with checking other possible biases, but for simplicity reasons here we are omitting the discussion the most of the scenarios and focus on the two which have given us the best results: Movie/User/Year/Genres and Movie/User/Year/Genres/Regularization. 
 ```{r echo=FALSE}
 #Predict using only user effect
 user_avgs <- train_set %>% 
@@ -232,7 +235,7 @@ predicted_ratings <- test_set %>%
 i_u_g_rmse<-RMSE(predicted_ratings, test_set$rating)
 rmse_results <- rmse_results %>% add_row(method = "Movie/User/Genres", RMSE = i_u_g_rmse)
 ```
-In all different bias combinations we achieved the best results with Movie/User/Year/Genres combination.
+Movie/User/Year/Genres combination can be described using following formula:
 $$Y_{u,i} = \mu + b_{i} + b_{u} + b_{y} + b_{g} + \varepsilon_{u, i}$$
 ```{r echo=TRUE}
 #Predict using user & movie & year & genres effect
@@ -252,10 +255,11 @@ predicted_ratings <- test_set %>%
   pull(pred)
 
 i_u_y_g_rmse<-RMSE(predicted_ratings, test_set$rating)
-rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres", RMSE = i_u_y_g_rmse)
-
+rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres", 
+                                         RMSE = i_u_y_g_rmse)
+i_u_y_g_rmse
 ```
-Result is good but we still have not reached our second objective. e.i. RMSE < 0.86490. from the edx dataset is easy to see that some movies are receiving only a handful reviews and their rating could mess up with recommendation. To mitigate this effect regularization should be performed and suitable lambda which minimizes RMSE be chosen.
+Result is good but we still have not reached our second objective. e.i. RMSE < 0.86490. From the edx dataset is easy to see that some movies are receiving only a handful reviews and their rating could mess up with recommendation. To mitigate this effect regularization should be performed and suitable lambda which minimizes RMSE be chosen.
 
 ```{r, echo=TRUE}
 mu <- mean(train_set$rating)
@@ -303,7 +307,8 @@ rmses <- sapply(lambdas, function(lambda) {
 })
 min_lambda <- lambdas[which.min(rmses)]
 i_u_y_g_cv_rmse<-min(rmses)
-rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres cross-validation", RMSE = i_u_y_g_cv_rmse)
+rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres cross-validation", 
+                                         RMSE = i_u_y_g_cv_rmse)
 
 ```
 

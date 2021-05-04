@@ -57,11 +57,14 @@ test_index_edx <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list =
 train_set <- edx[-test_index_edx,]
 tmp_test_set <- edx[test_index_edx,]
 
-# Ensure userId and movieId in test_set are also in edx set
+# Ensure userId and movieId in test_set are also in train set
 test_set <- tmp_test_set %>% 
   semi_join(train_set, by = "movieId") %>%
   semi_join(train_set, by = "userId")
 
+# Add rows removed from test set back into train set
+removed_test <- anti_join(tmp_test_set, test_set)
+train_set <- rbind(train_set, removed_test)
 
 #Naive rmse model
 mu <- mean(train_set$rating)
@@ -185,7 +188,7 @@ rmse_results
 
 lambdas <- seq(0, 5, 0.25)
 rmses <- sapply(lambdas, function(lambda) {
-  # Calculate the average by user
+  # Calculate the average by movie
   
   b_i <- edx %>%
     group_by(movieId) %>%
@@ -198,12 +201,14 @@ rmses <- sapply(lambdas, function(lambda) {
     group_by(userId) %>%
     summarize(b_u = sum(rating - mu - b_i) / (n() + lambda))
   
+  # Calculate the average by year
   b_y <- train_set %>%
     left_join(b_i, by='movieId') %>%
     left_join(b_u, by='userId') %>%
     group_by(year) %>%
     summarize(b_y = mean(rating - mu - b_i  - b_u))
   
+  # Calculate the average by genres
   b_g <- train_set %>%
     left_join(b_i, by='movieId') %>%
     left_join(b_u, by='userId') %>%
@@ -235,6 +240,7 @@ rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres cross-
 
 #--- validation ---
 
+# Calculate the average by movie
 b_i <- edx %>%
   group_by(movieId) %>%
   summarize(b_i = sum(rating - mu) / (n() + min_lambda))
@@ -246,12 +252,14 @@ b_u <- edx %>%
   group_by(userId) %>%
   summarize(b_u = sum(rating - mu - b_i) / (n() + min_lambda))
 
+# Calculate the average by year
 b_y <- edx %>%
   left_join(b_i, by='movieId') %>%
   left_join(b_u, by='userId') %>%
   group_by(year) %>%
   summarize(b_y = mean(rating - mu - b_i  - b_u))
 
+# Calculate the average by genres
 b_g <- edx %>%
   left_join(b_i, by='movieId') %>%
   left_join(b_u, by='userId') %>%
