@@ -1,0 +1,372 @@
+---
+title: 'HarvardX Data Science Capstone: MovieLens Project'
+author: "Medea"
+date: "5/3/2021"
+output:
+  pdf_document:
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Introduction
+In our era business success often depends if we are able to recommend correct product to the end-user. The good example of this is streaming services like Netflix. To keep users engaged we must provide them content relative to them. 
+
+We have built our movie rating predictation model by expanded what we have learned in Prof. Rafael A Irizarry's class about Netflix challenge,  Assumptions here reader is familiar terms like RMSE & regularization, so we won't need to redefine them. We would highly recommend to check his "Introduction to Data Science".
+
+In this project we pursued two simple objectives:
+
+1. Try to analyze what were the key factors that contributed to the high or low rating for the specific user, which is the the heart of movie recommendation 
+2. Make RMSE < 0.86490
+
+
+Data we used in the analysis comes from GroupLens,  10M version, which makes our work simpler but data sufficient enough to draw vital conclusions.  We performed data wrangling: split data for training/testing/validation reasons, compare different biases and achieved our goals. 
+
+# Analysis
+After download we have reviewed columns of the movielens, we decided to extract year from timestamp  as separate column.
+For analysis data was split into edx (90%) & validation(10%) sets . Former for training and latter for the final validation.
+```{r include=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+colnames(movielens)
+#extract year from timestamp since it may influence rating
+movielens<-movielens %>% mutate(year=format(as.POSIXct(timestamp,origin="1970-01-01"), "%Y"))
+dims<-dim(movielens)
+```
+```{r include=FALSE}
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+```
+```{r include=FALSE}
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+We observed columns/dimensions and distinct users, movies, genres, year in the edx/validation dataset
+
+```{r, echo=TRUE}
+colnames(edx)
+dim(edx)
+dim(validation)
+```
+```{r, echo=TRUE}
+edx %>% 
+  summarize(n_users = n_distinct(userId),
+            n_movies = n_distinct(movieId),
+            n_genres=n_distinct(genres),
+            n_year=n_distinct(year),
+            )
+```
+
+Based on simple intuition move itself as well as crankiness of the user affects overall rating of the movie. But are they real factors? If Yes, what are other bias? Genres, year seems to be like good candidate to check. To summarize we had following questions for us:
+
+1. What RMSE we will get if we use naive approach, e.i. if we follow our intuition and give movies rating as average of whole ratings
+2. What if we only consider movie affect?
+3. What if we only consider user affect?
+4. What if we only consider year affect?
+5. What if we only consider genres affect?
+6. What if we use different combination of those?
+7. Should we consider using of regularization?
+
+To create reliable model we divide edx dataset into the train(90%) and test(10%) sets. We also make sure userId and movieId in test_set are also in train set
+
+```{r}
+test_index_edx <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+train_set <- edx[-test_index_edx,]
+tmp_test_set <- edx[test_index_edx,]
+
+# Ensure userId and movieId in test_set are also in edx set
+test_set <- tmp_test_set %>% 
+  semi_join(train_set, by = "movieId") %>%
+  semi_join(train_set, by = "userId")
+```
+First let's develop simple model and predict the same rating for all movies regardless of user. Here all the differences explained by random variation and model would look like this:
+
+$$Y_{u,i} = \mu + \varepsilon_{u, i}$$
+
+Which is translated into following code:
+```{r echo=TRUE}
+#Naive rmse model
+mu <- mean(train_set$rating)
+naive_rmse <- RMSE(test_set$rating, mu)
+naive_rmse
+rmse_results <- tibble(method = "Average", RMSE = naive_rmse)
+```
+Once we have a starting line model we can start to augment it. For example let's consider movie effect only. It can be depicted using following formula:
+
+$$Y_{u,i} = \mu +b_{i}+ \varepsilon_{u, i}$$
+where term  $b_{i}$ to represent average ranking for movie.
+
+```{r echo=TRUE}
+
+#Predict using only movie effect
+movie_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  mutate(pred = mu + b_i) %>%
+  pull(pred)
+
+i_rmse <-RMSE(predicted_ratings, test_set$rating)
+i_rmse
+rmse_results <- rmse_results %>% add_row(method = "Movie", RMSE = i_rmse)
+qplot(b_i, data = movie_avgs, bins = 10, color = I("black"))
+```
+The result we get is much better than naive one. We proceed with other bias, but for simplicity reasons in the snippets below we are showing only two scenarios: Movie/User/Year/Genres and Movie/User/Year/Genres/Regularization
+```{r echo=FALSE}
+#Predict using only user effect
+user_avgs <- train_set %>% 
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu))
+
+predicted_ratings <- test_set %>% 
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_u) %>%
+  pull(pred)
+
+u_rmse <-RMSE(predicted_ratings, test_set$rating)
+rmse_results <- rmse_results %>% add_row(method = "User", RMSE = u_rmse)
+
+#Predict using only year effect
+year_avgs <- train_set %>% 
+  group_by(year) %>%
+  summarize(b_y = mean(rating - mu))
+
+predicted_ratings <- test_set %>% 
+  left_join(year_avgs, by='year') %>%
+  mutate(pred = mu + b_y) %>%
+  pull(pred)
+
+y_rmse <-RMSE(predicted_ratings, test_set$rating)
+rmse_results <- rmse_results %>% add_row(method = "Year", RMSE = y_rmse)
+
+#Predict using user & movie effect
+user_avgs <- train_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+i_u_rmse <-RMSE(predicted_ratings, test_set$rating)
+rmse_results <- rmse_results %>% add_row(method = "Movie/User", RMSE = i_u_rmse)
+
+#Predict using user & movie & year effect
+year_avgs <- train_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(year) %>%
+  summarize(b_y = mean(rating - mu - b_i - b_u))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_avgs, by='year') %>%
+  mutate(pred = mu + b_i + b_u + b_y ) %>%
+  pull(pred)
+
+i_u_y_rmse <-RMSE(predicted_ratings, test_set$rating)
+rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year", RMSE = i_u_y_rmse)
+
+#Predict using user & movie &  genres effect
+genres_avgs <- train_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarize(b_g = mean(rating - mu - b_i - b_u ))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_avgs, by='year') %>%
+  left_join(genres_avgs, by='genres') %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  pull(pred)
+
+i_u_g_rmse<-RMSE(predicted_ratings, test_set$rating)
+rmse_results <- rmse_results %>% add_row(method = "Movie/User/Genres", RMSE = i_u_g_rmse)
+```
+In all different bias combinations we achieved the best results with Movie/User/Year/Genres combination.
+$$Y_{u,i} = \mu + b_{i} + b_{u} + b_{y} + b_{g} + \varepsilon_{u, i}$$
+```{r echo=TRUE}
+#Predict using user & movie & year & genres effect
+genres_avgs <- train_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_avgs, by='year') %>%
+  group_by(genres) %>%
+  summarize(b_g = mean(rating - mu - b_i - b_u - b_y))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_avgs, by='year') %>%
+  left_join(genres_avgs, by='genres') %>%
+  mutate(pred = mu + b_i + b_u + b_y + b_g) %>%
+  pull(pred)
+
+i_u_y_g_rmse<-RMSE(predicted_ratings, test_set$rating)
+rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres", RMSE = i_u_y_g_rmse)
+
+```
+Result is good but we still have not reached our second objective. e.i. RMSE < 0.86490. from the edx dataset is easy to see that some movies are receiving only a handful reviews and their rating could mess up with recommendation. To mitigate this effect regularization should be performed and suitable lambda which minimizes RMSE be chosen.
+
+```{r, echo=TRUE}
+mu <- mean(train_set$rating)
+lambdas <- seq(0, 5, 0.25)
+rmses <- sapply(lambdas, function(lambda) {
+  # Calculate the average by user
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu) / (n() + lambda))
+  
+  # Calculate the average by user
+  
+  b_u <- train_set %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - mu - b_i) / (n() + lambda))
+  
+  b_y <- train_set %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(year) %>%
+    summarize(b_y = mean(rating - mu - b_i  - b_u))
+  
+  b_g <- train_set %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_y, by='year') %>%
+    group_by(genres) %>%
+    summarize(b_g = mean(rating - mu - b_i - b_u - b_y))
+  
+  # Compute the predicted ratings on test_set dataset
+  
+  predicted_ratings <- test_set %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_y, by='year') %>%
+    left_join(b_g, by='genres') %>%
+    mutate(pred = mu + b_i + b_u + b_y + b_g) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+  return (RMSE(predicted_ratings,test_set$rating))
+})
+min_lambda <- lambdas[which.min(rmses)]
+i_u_y_g_cv_rmse<-min(rmses)
+rmse_results <- rmse_results %>% add_row(method = "Movie/User/Year/Genres cross-validation", RMSE = i_u_y_g_cv_rmse)
+
+```
+
+Let's plot our lambdas to observe dynamic
+
+```{r , echo=FALSE}
+qplot(lambdas, rmses)
+```
+
+# Results
+After observing results we had from our training set we conclude that the most valuable bias combination is : user/movie/year/genre in combination with data regularization, the most insignificant effect is Year, but we still decide to keep it.
+Lambda value used:
+```{r }
+min_lambda <- lambdas[which.min(rmses)]
+```
+The results on train set
+```{r rmse_results}
+rmse_results %>% knitr::kable()
+```
+
+Once we tried different combinations of bias and created our final model we test it against validation set.
+```{r , echo=FALSE}
+ 
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu) / (n() + min_lambda))
+  
+  # Calculate the average by user
+  
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - mu - b_i) / (n() + min_lambda))
+  
+  b_y <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(year) %>%
+    summarize(b_y = mean(rating - mu - b_i  - b_u))
+  
+  b_g <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_y, by='year') %>%
+    group_by(genres) %>%
+    summarize(b_g = mean(rating - mu - b_i - b_u - b_y))
+  
+  # Compute the predicted ratings on validation dataset
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_y, by='year') %>%
+    left_join(b_g, by='genres') %>%
+    mutate(pred = mu + b_i + b_u + b_y + b_g) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+ finalRMSE<- RMSE(predicted_ratings,validation$rating)
+```
+So we have achieved our objectives.
+
+# Conclusion
+Next step in analyzes is to split "genres" column into separate columns and see if some genres combination contributes rating more than others. With current data  Also it is unfortunate that last year in data is 2009, since it would be interesting to see how global pandemic affected movie ratings and if now year changed from insignificant parameter to something very important. 
+
