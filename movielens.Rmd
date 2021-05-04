@@ -99,10 +99,10 @@ edx %>%
 Based on intuition movie itself as well as crankiness of the user contributes overall rating of the movie. This can be easily proved by data. We also review other possible bias factors. So questions we've tried to answer:
 
 1. What RMSE we will get if we use naive approach, e.i. if we follow our intuition and give movies rating as average of whole ratings
-2. What if we only consider movie affect?
-3. What if we only consider user affect?
-4. What if we only consider year affect?
-5. What if we only consider genres affect?
+2. What if we only consider movie effect?
+3. What if we only consider user effect?
+4. What if we only consider year effect?
+5. What if we only consider genres effect?
 6. What if we use different combination of those?
 7. Should we consider using of regularization?
 
@@ -265,13 +265,11 @@ Result is good but we still have not reached our second objective. e.i. RMSE < 0
 mu <- mean(train_set$rating)
 lambdas <- seq(0, 5, 0.25)
 rmses <- sapply(lambdas, function(lambda) {
-  # Calculate the average by user
   
   b_i <- edx %>%
     group_by(movieId) %>%
     summarize(b_i = sum(rating - mu) / (n() + lambda))
   
-  # Calculate the average by user
   
   b_u <- train_set %>%
     left_join(b_i, by='movieId') %>%
@@ -336,7 +334,6 @@ Once we tried different combinations of bias and created our final model we test
     group_by(movieId) %>%
     summarize(b_i = sum(rating - mu) / (n() + min_lambda))
   
-  # Calculate the average by user
   
   b_u <- edx %>%
     left_join(b_i, by='movieId') %>%
